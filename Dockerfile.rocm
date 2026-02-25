@@ -1,0 +1,82 @@
+# =============================================================================
+# Dockerfile.rocm — All-in-One: vLLM (ROCm) + RAG App
+# =============================================================================
+FROM docker.io/rocm/vllm-dev:nightly
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV ROCM_HOME=/opt/rocm
+ENV PATH="${ROCM_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${ROCM_HOME}/lib:${LD_LIBRARY_PATH}"
+ENV HSA_OVERRIDE_GFX_VERSION=12.0.1
+
+RUN pip install --upgrade pip
+
+# Catat kondisi awal PyTorch ROCm
+RUN python -c "\
+import torch; \
+print('PyTorch version:', torch.__version__); \
+print('HIP:', torch.version.hip); \
+print('GPU available:', torch.cuda.is_available())"
+
+# ============================================================
+# Install langchain (TANPA chromadb dulu)
+# ============================================================
+RUN pip install --no-cache-dir \
+    langchain \
+    langchain-core \
+    langchain-community \
+    langchain-text-splitters
+
+# ============================================================
+# Chromadb: install TANPA dependency (hindari onnxruntime tarik torch)
+# ============================================================
+RUN pip install --no-cache-dir --no-deps chromadb
+RUN pip install --no-cache-dir --no-deps langchain-chroma
+
+# Dependency chromadb yang aman (bukan torch)
+RUN pip install --no-cache-dir \
+    pypika overrides mmh3 bcrypt posthog \
+    build importlib-resources kubernetes
+
+# onnxruntime TANPA dependency (agar tidak tarik torch CUDA)
+RUN pip install --no-cache-dir --no-deps onnxruntime
+RUN pip install --no-cache-dir flatbuffers
+
+# ============================================================
+# Sentence-transformers & langchain-huggingface TANPA dep torch
+# ============================================================
+RUN pip install --no-cache-dir --no-deps \
+    sentence-transformers \
+    langchain-huggingface
+
+# Sub-dependency yang aman
+RUN pip install --no-cache-dir \
+    scikit-learn scipy Pillow
+
+# ============================================================
+# Verifikasi: PyTorch ROCm + vLLM masih utuh
+# ============================================================
+# PERBAIKAN: Cek torch.version.hip bukan None (bukan cek string "rocm")
+# Base image pakai custom build "2.9.1+git..." yang tidak ada string "rocm"
+RUN python -c "\
+import torch; \
+print('PyTorch version:', torch.__version__); \
+print('HIP version:', torch.version.hip); \
+assert torch.version.hip is not None, \
+  f'ERROR: HIP tidak terdeteksi! torch.version.hip={torch.version.hip}'; \
+print('✓ PyTorch ROCm OK')"
+
+RUN python -c "import vllm; print('✓ vLLM OK:', vllm.__version__)"
+
+# PERBAIKAN: Cek import yang benar untuk langchain 1.x
+RUN python -c "from langchain_classic.chains import create_retrieval_chain; print('✓ langchain chains OK')"
+RUN python -c "from langchain_classic.chains.combine_documents import create_stuff_documents_chain; print('✓ langchain stuff chain OK')"
+RUN python -c "from langchain_community.llms import VLLM; print('✓ langchain VLLM OK')"
+RUN python -c "from langchain_huggingface import HuggingFaceEmbeddings; print('✓ HuggingFace OK')"
+RUN python -c "from langchain_chroma import Chroma; print('✓ Chroma OK')"
+RUN python -c "from sentence_transformers import SentenceTransformer; print('✓ SentenceTransformers OK')"
+
+WORKDIR /app
+COPY . .
+CMD ["python", "rag_slurm_vllm.py.py"]
