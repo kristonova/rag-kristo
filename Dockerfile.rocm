@@ -1,5 +1,17 @@
 # =============================================================================
 # Dockerfile.rocm — All-in-One: vLLM (ROCm) + RAG App
+# To run this Dockerfile, use:
+#   docker build -t rag-kristo-rocm -f Dockerfile.rocm .
+# Then run the container with:
+# podman run -it --rm   \
+# --cap-add=SYS_PTRACE   \
+# --device=/dev/kfd  \
+#  --device=/dev/dri   \
+#  -v $(pwd):/app:Z   \
+#  -v ~/.cache/huggingface:/root/.cache/huggingface:Z  \
+# --group-add keep-groups   \
+# rag-kristo-rocm   \
+# bash
 # =============================================================================
 FROM docker.io/rocm/vllm-dev:nightly
 

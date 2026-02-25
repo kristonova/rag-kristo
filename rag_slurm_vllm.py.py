@@ -51,11 +51,12 @@ def main():
 
     # Konfigurasi vLLM
     llm = VLLM(
-        model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        model="meta-llama/Llama-3.1-8B-Instruct",
         trust_remote_code=True,
         max_new_tokens=512,
-        temperature=0.1,
+        temperature=0.5,
         top_p=0.9,
+        stop=["<|eot_id|>"],             # ← Stop string (bukan token ID)
         tensor_parallel_size=1,
         vllm_kwargs={
             "gpu_memory_utilization": 0.90,
@@ -70,20 +71,21 @@ def main():
     # Setup Retriever
     retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 
-    # Buat Prompt dengan format ChatML
-    template_qwen = """<|im_start|>system
+    # Buat Prompt dengan format LLAMA 3.1 (bukan ChatML!)
+    template_llama = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
 Kamu adalah agen AI asisten admin HPC Slurm yang ahli. Tugasmu adalah membantu user melakukan troubleshooting berdasarkan dokumen referensi yang diberikan. Gunakan Bahasa Indonesia yang jelas dan mudah dipahami.
-Jika jawabannya tidak ada di dokumen referensi, katakan "Saya tidak menemukan informasi tersebut di sistem." Jangan mengarang jawaban.<|im_end|>
-<|im_start|>user
+Jika jawabannya tidak ada di dokumen referensi, katakan "Saya tidak menemukan informasi tersebut di sistem." Jangan mengarang jawaban.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
 Dokumen Referensi:
 {context}
 
-Pertanyaan: {input}<|im_end|>
-<|im_start|>assistant
+Pertanyaan: {input}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
 """
 
     prompt = PromptTemplate(
-        template=template_qwen,
+        template=template_llama,
         input_variables=["context", "input"]
     )
 
