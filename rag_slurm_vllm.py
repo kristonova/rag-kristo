@@ -1,5 +1,4 @@
 import os
-import glob
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -15,34 +14,27 @@ def main():
 
     # --- FASE 1: MEMASUKKAN DATA (INGESTION) ---
 
-    # 1. Load SEMUA Dokumen .txt dari folder wiki/
-    wiki_files = sorted(glob.glob("wiki/*.txt"))
-    print(f"[1] Membaca {len(wiki_files)} dokumen dari folder wiki/...")
-    docs = []
-    for f in wiki_files:
-        print(f"    → {f}")
-        loader = TextLoader(f)
-        docs.extend(loader.load())
+    # 1. Load dokumen
+    wiki_file = "wiki/Komputasi_Python_dengan_Conda_Environment_User.txt"
+    print(f"[1] Membaca dokumen: {wiki_file}")
+    loader = TextLoader(wiki_file)
+    docs = loader.load()
 
-        # ...existing code...
-    
-        # 2. Potong Teks (Chunking)
-        print("[2] Memotong teks menjadi bagian kecil...")
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500, 
-            chunk_overlap=300,
-            separators=["\n---", "\n## ", "\n### ", "\n\n", "\n", " "],
-        )  
-        splits = text_splitter.split_documents(docs)
-    
-        # Tambahkan nama file sebagai metadata ke setiap chunk
-        for s in splits:
-            source = os.path.basename(s.metadata.get("source", ""))
-            s.page_content = f"[Sumber: {source}]\n{s.page_content}"
-    
-        print(f"    → Jumlah chunk: {len(splits)}")
-    
-    # ...existing code...
+    # 2. Potong Teks (Chunking)
+    print("[2] Memotong teks menjadi bagian kecil...")
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=4500, 
+        chunk_overlap=300,
+        separators=["\n---", "\n## ", "\n### ", "\n\n", "\n", " "],
+    )  
+    splits = text_splitter.split_documents(docs)
+
+    # Tambahkan nama file sebagai metadata ke setiap chunk
+    for s in splits:
+        source = os.path.basename(s.metadata.get("source", ""))
+        s.page_content = f"[Sumber: {source}]\n{s.page_content}"
+
+    print(f"    → Jumlah chunk: {len(splits)}")
 
     # DEBUG: Tampilkan isi setiap chunk agar bisa dievaluasi
     for i, s in enumerate(splits):
@@ -52,7 +44,7 @@ def main():
 
     # 3. Setup Model Embedding (Lokal via HuggingFace - CPU/GPU)
     print("[3] Load model embedding lokal...")
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
     # 4. Simpan ke Vector Database (Chroma)
     print("[4] Menyimpan vektor ke database Chroma...")
@@ -68,8 +60,8 @@ def main():
     llm = VLLM(
         model="Qwen/Qwen2.5-Coder-7B-Instruct",  # ← Ganti kembali
         trust_remote_code=True,
-        max_new_tokens=512,
-        temperature=0.1,                           # ← Turunkan dari 0.6
+        max_new_tokens=1024,
+        temperature=0.1,                           
         top_p=0.9,
         tensor_parallel_size=1,
         vllm_kwargs={
@@ -83,19 +75,22 @@ def main():
     # --- FASE 3: TANYA JAWAB (RETRIEVAL & GENERATION) ---
 
     # Setup Retriever
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 15})
 
     # ...existing code...
-    
-        # Buat Prompt dengan format ChatML (untuk Qwen)
+    # Buat Prompt dengan format ChatML (untuk Qwen)
     template_qwen = """<|im_start|>system
-    Kamu adalah agen AI asisten admin HPC Slurm yang ahli. Tugasmu adalah membantu user berdasarkan dokumen referensi yang diberikan. Gunakan Bahasa Indonesia yang jelas.
-    
-    Aturan:
-    1. Jawab HANYA berdasarkan dokumen referensi. Sertakan angka, nama model, dan spesifikasi teknis yang spesifik jika ada di dokumen.
-    2. Jika informasi bisa DISIMPULKAN dari dokumen (misal: hanya Python 3 yang tersedia berarti Python 2 tidak bisa), berikan kesimpulan tersebut.
-    3. Jika informasi benar-benar TIDAK ADA di dokumen, katakan "Saya tidak menemukan informasi tersebut di sistem."
-    4. Jangan mengarang angka, rumus, atau fakta yang tidak ada di dokumen.<|im_end|>
+Kamu adalah agen AI asisten admin HPC Slurm yang ahli. Tugasmu adalah membantu user berdasarkan dokumen referensi yang diberikan. Gunakan Bahasa Indonesia yang jelas.
+
+Aturan:
+1. Jawab HANYA berdasarkan dokumen referensi. KUTIP langkah-langkah dan perintah PERSIS seperti di dokumen. Jangan menambahkan langkah atau perintah yang tidak ada di dokumen.
+2. Sertakan angka, nama, versi, dan spesifikasi PERSIS seperti tertulis di dokumen. Jangan membulatkan atau menambah presisi. Contoh: jika dokumen bilang ">=11", jawab ">=11", BUKAN "11.0" atau "11.2".
+3. Jika informasi bisa DISIMPULKAN dari dokumen, berikan kesimpulan tersebut.
+4. Jika informasi benar-benar TIDAK ADA di dokumen, katakan "Saya tidak menemukan informasi tersebut di sistem."
+5. Jangan mengarang angka, rumus, perintah, URL, atau prosedur yang tidak ada di dokumen.
+6. JANGAN mengganti perintah dari dokumen dengan perintah alternatif. Contoh: jika dokumen menulis "source activate", JANGAN ganti dengan "conda activate".
+7. Bedakan "minimal" dan "maksimal". Jika dokumen hanya menyebutkan "minimal X" TANPA batas maksimal, jawab bahwa informasi batas maksimal tidak tersedia di dokumen.<im_end|>
+
     <|im_start|>user
     Dokumen Referensi:
     {context}
@@ -118,46 +113,35 @@ def main():
     # --- UJI COBA: BATCH SEMUA PERTANYAAN ---
     pertanyaan_list = [
         # ===== LEVEL 1: Fakta Langsung =====
-        # [spesifikasi_aleleon.txt]
-        "Berapa jumlah RAM per node di partisi epyc-jumbo?",
-        "GPU apa yang digunakan di partisi ampere?",
-        "Sistem operasi apa yang digunakan ALELEON Supercomputer?",
-        # [mpi_aleleon_superkomputer.txt]
-        "Implementasi MPI apa yang digunakan ALELEON Supercomputer?",
-        # [tutorial_akun_trial_a6.txt]
-        "Berapa limit maksimal concurrent job untuk akun uji coba trial A6?",
-        # [komputasi_python_venv_user.txt]
-        "Di direktori mana sebaiknya virtual environment Python ditempatkan di ALELEON?",
+        "Bagaimana cara membuat conda environment di aleleon?",
+        "bagaimana cara menjalankan jupyter dengan conda environment sendiri?",
+        "Versi Python default dari Anaconda3 2025.06-1 apa?",
+        "Perintah apa untuk mengaktifkan Mamba 23.11.0-0?",
+        "Bagaimana cara membuat modul pyload setelah conda env aktif?",
+        "Perintah apa untuk melihat daftar modul pyload yang tersedia?",
+        "Di partisi GPU mana batch job conda berjalan?",
+        "Apa email support admin ALELEON?",
+        "Jam kerja support EFISON kapan?",
 
         # ===== LEVEL 2: Gabungan Info (Multi-Chunk) =====
-        # [spesifikasi_aleleon.txt]
-        "Apa perbedaan spesifikasi antara partisi epyc dan partisi ampere?",
-        "Partisi mana saja yang memiliki GPU dan apa spesifikasi GPU di masing-masing partisi?",
-        # [metode_komputasi_efison.txt]
-        "Apa perbedaan antara batch job dan sesi interaktif di ALELEON?",
-        # [tutorial_akun_trial_a6.txt]
-        "Bagaimana cara login ke ALELEON Supercomputer? Sebutkan opsi yang tersedia.",
-        # [mpi_aleleon_superkomputer.txt]
-        "Apa perbedaan antara Pure MPI dan Hybrid MPI/OpenMP di ALELEON?",
+        "Apa saja pilihan cara menjalankan komputasi Python dengan conda env di ALELEON?",
+        "Apa perbedaan antara menjalankan batch job via Job Composer EWS dan via terminal Slurm?",
+        "Bagaimana langkah lengkap membuat conda env baru dan modul pyload dari awal?",
+        "Apa saja status job di squeue dan artinya masing-masing?",
+        "Bagaimana cara mengisi formulir Jupyter di EWS untuk conda env user?",
 
         # ===== LEVEL 3: Reasoning / Deduksi =====
-        # [spesifikasi_aleleon.txt]
-        "Saya punya job yang butuh 400GB RAM. Partisi mana yang bisa saya gunakan?",
-        "Apakah ALELEON mendukung container Docker? Jika tidak, alternatifnya apa?",
-        # [komputasi_python_venv_user.txt + metode_komputasi_efison.txt]
-        "Saya ingin pakai Python 2 di ALELEON. Apakah bisa?",
-        # [tutorial_akun_trial_a6.txt]
-        "Saya ingin menjalankan PyTorch di sesi Jupyter dengan GPU. Partisi apa yang harus saya pilih dan langkah apa saja yang perlu dilakukan?",
-        # [mpi_aleleon_superkomputer.txt]
-        "Saya ingin menjalankan 192 proses MPI dan butuh total 400GB RAM. Bagaimana cara mengisi SBATCH mem?",
-        # [komputasi_python_venv_user.txt]
-        "Kenapa saya harus mengaktifkan module python dan venv di dalam submit script SLURM, bukan hanya di terminal?",
+        "Saya ingin pakai TensorFlow GPU di conda env. Package CUDA versi berapa yang harus saya instal?",
+        "Kenapa Anaconda3 2024.06-1 tidak direkomendasikan? Apa yang harus dilakukan user yang sudah terpasang?",
+        "Saya upload file Notebook (.ipynb) untuk batch job. Apa yang harus saya lakukan sebelum submit?",
+        "Kenapa submit script menggunakan header #!/bin/bash -l dan perintah pyl load/pyl unload?",
+        "Saya ingin menggunakan multi-GPU di ALELEON untuk deep learning. Package apa yang perlu diinstal?",
+        "Storage HOME saya hampir penuh setelah banyak instal package conda. Bagaimana cara membersihkannya?",
 
         # ===== LEVEL 4: Anti-Hallucination (jawaban TIDAK ada di dokumen) =====
-        "Berapa biaya sewa per jam untuk menggunakan ALELEON Supercomputer?",
-        "Apakah ALELEON mendukung GPU AMD Instinct MI300X?",
-        "Apakah ALELEON menyediakan akses ke cloud storage seperti AWS S3?",
-        "Berapa kecepatan clock boost maksimal CPU EPYC 7702P di ALELEON?",
+        "Berapa harga berlangganan conda env di ALELEON per bulan?",
+        "Apakah ALELEON mendukung instalasi Docker di dalam conda env?",
+        "Berapa jumlah maksimal GPU yang bisa diminta dalam satu batch job conda?",
     ]
 
     # Batch invoke: kumpulkan semua input sekaligus lalu proses satu loop

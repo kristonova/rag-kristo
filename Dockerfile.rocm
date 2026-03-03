@@ -24,7 +24,7 @@ ENV HSA_OVERRIDE_GFX_VERSION=12.0.1
 
 RUN pip install --upgrade pip
 
-# Catat kondisi awal PyTorch ROCm
+# Log initial state of PyTorch ROCm
 RUN python -c "\
 import torch; \
 print('PyTorch version:', torch.__version__); \
@@ -32,7 +32,7 @@ print('HIP:', torch.version.hip); \
 print('GPU available:', torch.cuda.is_available())"
 
 # ============================================================
-# Install langchain (TANPA chromadb dulu)
+# Install langchain (WITHOUT chromadb for now)
 # ============================================================
 RUN pip install --no-cache-dir \
     langchain \
@@ -41,47 +41,47 @@ RUN pip install --no-cache-dir \
     langchain-text-splitters
 
 # ============================================================
-# Chromadb: install TANPA dependency (hindari onnxruntime tarik torch)
+# Chromadb: install WITHOUT dependencies (avoid onnxruntime pulling torch)
 # ============================================================
 RUN pip install --no-cache-dir --no-deps chromadb
 RUN pip install --no-cache-dir --no-deps langchain-chroma
 
-# Dependency chromadb yang aman (bukan torch)
+# Safe chromadb dependencies (not torch)
 RUN pip install --no-cache-dir \
     pypika overrides mmh3 bcrypt posthog \
     build importlib-resources kubernetes
 
-# onnxruntime TANPA dependency (agar tidak tarik torch CUDA)
+# onnxruntime WITHOUT dependencies (so it doesn't pull torch CUDA)
 RUN pip install --no-cache-dir --no-deps onnxruntime
 RUN pip install --no-cache-dir flatbuffers
 
 # ============================================================
-# Sentence-transformers & langchain-huggingface TANPA dep torch
+# Sentence-transformers & langchain-huggingface WITHOUT torch dep
 # ============================================================
 RUN pip install --no-cache-dir --no-deps \
     sentence-transformers \
     langchain-huggingface
 
-# Sub-dependency yang aman
+# Safe sub-dependencies
 RUN pip install --no-cache-dir \
     scikit-learn scipy Pillow
 
 # ============================================================
-# Verifikasi: PyTorch ROCm + vLLM masih utuh
+# Verification: PyTorch ROCm + vLLM still intact
 # ============================================================
-# PERBAIKAN: Cek torch.version.hip bukan None (bukan cek string "rocm")
-# Base image pakai custom build "2.9.1+git..." yang tidak ada string "rocm"
+# FIX: Check torch.version.hip is not None (do not check for "rocm" string)
+# Base image uses custom build "2.9.1+git..." which doesn't have "rocm" string
 RUN python -c "\
 import torch; \
 print('PyTorch version:', torch.__version__); \
 print('HIP version:', torch.version.hip); \
 assert torch.version.hip is not None, \
-  f'ERROR: HIP tidak terdeteksi! torch.version.hip={torch.version.hip}'; \
+  f'ERROR: HIP not detected! torch.version.hip={torch.version.hip}'; \
 print('✓ PyTorch ROCm OK')"
 
 RUN python -c "import vllm; print('✓ vLLM OK:', vllm.__version__)"
 
-# PERBAIKAN: Cek import yang benar untuk langchain 1.x
+# FIX: Check correct imports for langchain 1.x
 RUN python -c "from langchain_classic.chains import create_retrieval_chain; print('✓ langchain chains OK')"
 RUN python -c "from langchain_classic.chains.combine_documents import create_stuff_documents_chain; print('✓ langchain stuff chain OK')"
 RUN python -c "from langchain_community.llms import VLLM; print('✓ langchain VLLM OK')"
@@ -91,4 +91,4 @@ RUN python -c "from sentence_transformers import SentenceTransformer; print('✓
 
 WORKDIR /app
 COPY . .
-CMD ["python", "rag_slurm_vllm.py.py"]
+CMD ["python", "rag_slurm_vllm.py"]

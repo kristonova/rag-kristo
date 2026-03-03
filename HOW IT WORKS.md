@@ -1,6 +1,6 @@
-# Penjelasan Lengkap Cara Kerja Kode RAG
+# Complete Explanation of the RAG Code Logic
 
-## Arsitektur Keseluruhan
+## Overall Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -11,27 +11,27 @@
 │  │ Pipeline │   │ + Store  │   │  (Search) │   │   (LLM)     │ │
 │  └──────────┘   └──────────┘   └──────────┘   └─────────────┘ │
 │                                                                 │
-│  Fase 1: Data Masuk    Fase 2: Simpan Vektor   Fase 3: Jawab  │
+│  Phase 1: Input Data   Phase 2: Save Vectors   Phase 3: Answer│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## FASE 1: Data Ingestion Pipeline
+## PHASE 1: Data Ingestion Pipeline
 
-### Langkah 1 — Load Dokumen
+### Step 1 — Load Documents
 
 ```python
 loader = TextLoader("spesifikasi_aleleon.txt")
 docs = loader.load()
 ```
 
-**Apa yang terjadi:**
-- `TextLoader` membaca file `.txt` mentah menjadi objek `Document`
-- Setiap `Document` punya 2 atribut:
-  - `page_content`: isi teks
-  - `metadata`: info file (nama, path)
-- Pada tahap ini, **seluruh file = 1 dokumen besar**
+**What happens:**
+- `TextLoader` reads raw `.txt` files into `Document` objects.
+- Each `Document` has 2 attributes:
+  - `page_content`: text content
+  - `metadata`: file info (name, path)
+- At this stage, **the entire file = 1 large document**.
 
 ```
 spesifikasi_aleleon.txt (4076 chars)
@@ -39,14 +39,14 @@ spesifikasi_aleleon.txt (4076 chars)
         ▼
 ┌──────────────────────────┐
 │ Document(                │
-│   page_content="Berikut  │
-│   adalah konversi..."    │
+│   page_content="Here     │
+│   is the conversion..."  │
 │   metadata={source:...}  │
 │ )                        │
 └──────────────────────────┘
 ```
 
-### Langkah 2 — Chunking (Pemotongan Teks)
+### Step 2 — Chunking (Text Splitting)
 
 ```python
 text_splitter = RecursiveCharacterTextSplitter(
@@ -57,190 +57,190 @@ text_splitter = RecursiveCharacterTextSplitter(
 splits = text_splitter.split_documents(docs)
 ```
 
-**Apa yang terjadi:**
+**What happens:**
 
-LLM punya batas context window. Kita tidak bisa memasukkan seluruh dokumen sekaligus. Jadi teks dipotong menjadi **chunk** kecil.
+LLMs have a context window limit. We cannot input the entire document at once. So the text is cut into small **chunks**.
 
-**Strategi `RecursiveCharacterTextSplitter`:**
+**`RecursiveCharacterTextSplitter` Strategy:**
 
-Splitter ini mencoba memotong secara **hierarkis** — mulai dari separator terbesar, turun ke yang terkecil:
-
-```
-Prioritas potong:
-  1. "\n---"   ← Potong di horizontal rule (pemisah seksi)
-  2. "\n## "   ← Potong di heading Markdown level 2
-  3. "\n\n"    ← Potong di paragraf kosong
-  4. "\n"      ← Potong di baris baru
-  5. " "       ← Potong di spasi (last resort)
-```
-
-**Kenapa "recursive"?** Karena jika potong di `\n---` menghasilkan chunk > 1000 chars, splitter **turun ke level berikutnya** (`\n## `), dan seterusnya sampai setiap chunk ≤ 1000 chars.
-
-**Parameter:**
+This splitter tries to cut **hierarchically** — starting from the largest separator down to the smallest:
 
 ```
-chunk_size=1000    → Maksimal 1000 karakter per chunk
-chunk_overlap=200  → 200 karakter terakhir chunk N diulang di awal chunk N+1
+Split priority:
+  1. "\n---"   ← Split at horizontal rules (section dividers)
+  2. "\n## "   ← Split at Markdown level 2 headings
+  3. "\n\n"    ← Split at empty paragraphs
+  4. "\n"      ← Split at new lines
+  5. " "       ← Split at spaces (last resort)
 ```
 
-**Kenapa overlap?** Agar informasi di perbatasan chunk tidak hilang:
+**Why "recursive"?** Because if splitting at `\n---` results in a chunk > 1000 chars, the splitter **descends to the next level** (`\n## `), and so on until every chunk is ≤ 1000 chars.
+
+**Parameters:**
 
 ```
-Dokumen asli:
-"...RAM per node: 500GB efektif | GPU per node: 2x RTX 3090..."
-
-Tanpa overlap (chunk_overlap=0):
-  Chunk 1: "...RAM per node: 500GB efek"  ← terpotong!
-  Chunk 2: "tif | GPU per node: 2x RTX 3090..."
-
-Dengan overlap (chunk_overlap=200):
-  Chunk 1: "...RAM per node: 500GB efektif | GPU per no"
-  Chunk 2: "500GB efektif | GPU per node: 2x RTX 3090..."
-                ↑ overlap — info tidak hilang
+chunk_size=1000    → Maximum 1000 characters per chunk
+chunk_overlap=200  → The last 200 characters of chunk N are repeated at the start of chunk N+1
 ```
 
-**Hasil chunking dokumen Anda:**
+**Why overlap?** To ensure information at the chunk boundaries is not lost:
 
 ```
-Dokumen (4076 chars)
+Original document:
+"...RAM per node: 500GB effective | GPU per node: 2x RTX 3090..."
+
+Without overlap (chunk_overlap=0):
+  Chunk 1: "...RAM per node: 500GB effec"  ← cut off!
+  Chunk 2: "tive | GPU per node: 2x RTX 3090..."
+
+With overlap (chunk_overlap=200):
+  Chunk 1: "...RAM per node: 500GB effective | GPU per no"
+  Chunk 2: "500GB effective | GPU per node: 2x RTX 3090..."
+                ↑ overlap — info is preserved
+```
+
+**Your document chunking results:**
+
+```
+Document (4076 chars)
         │
         ▼
 ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
 │ Chunk 0 │ │ Chunk 1 │ │ Chunk 2 │ │ Chunk 3 │ │ Chunk 4 │ │ Chunk 5 │ │ Chunk 6 │
 │ 303 chr │ │ 778 chr │ │ 958 chr │ │  3 chr  │ │ 976 chr │ │ 907 chr │ │ 151 chr │
 │ Intro   │ │ Compute │ │ Interac │ │  "---"  │ │Software │ │ PkgMgr  │ │ Footer  │
-│ ALELEON │ │  Node   │ │  Node   │ │         │ │ Sistem  │ │ & Tools │ │         │
+│ ALELEON │ │  Node   │ │  Node   │ │         │ │ System  │ │ & Tools │ │         │
 └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘
 ```
 
 ---
 
-## FASE 2: Embedding + Vector Database
+## PHASE 2: Embedding + Vector Database
 
-### Langkah 3 — Vector Embedding
+### Step 3 — Vector Embedding
 
 ```python
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 ```
 
-**Model yang dipakai: `all-MiniLM-L6-v2`**
+**Model used: `all-MiniLM-L6-v2`**
 
-| Properti | Detail |
+| Property | Detail |
 |---|---|
-| Arsitektur | MiniLM (distilled BERT) |
-| Parameter | 22.7M |
-| Dimensi output | **384 dimensi** |
-| Max sequence | 256 tokens |
-| Dilatih pada | 1 Billion sentence pairs |
-| Jalan di | **CPU** (ringan, ~90MB) |
+| Architecture | MiniLM (distilled BERT) |
+| Parameters | 22.7M |
+| Output Dimensions | **384 dimensions** |
+| Max Sequence | 256 tokens |
+| Trained on | 1 Billion sentence pairs |
+| Runs on | **CPU** (lightweight, ~90MB) |
 
-**Apa itu embedding?**
+**What is an embedding?**
 
-Embedding mengubah teks menjadi **vektor angka** di ruang 384 dimensi. Teks yang **mirip secara makna** akan punya vektor yang **dekat** satu sama lain.
+An embedding converts text into a **vector of numbers** in a 384-dimensional space. Texts with **similar meanings** will have vectors that are **close** to each other.
 
 ```
-"RAM per node di partisi epyc-jumbo adalah 500GB"
+"RAM per node in the epyc-jumbo partition is 500GB"
         │
         ▼  all-MiniLM-L6-v2
-[0.032, -0.118, 0.245, ..., 0.067]    ← 384 angka
+[0.032, -0.118, 0.245, ..., 0.067]    ← 384 numbers
 
-"Berapa jumlah RAM per node di partisi epyc-jumbo?"
+"How much RAM per node is in the epyc-jumbo partition?"
         │
         ▼  all-MiniLM-L6-v2
-[0.029, -0.121, 0.238, ..., 0.071]    ← 384 angka (MIRIP!)
+[0.029, -0.121, 0.238, ..., 0.071]    ← 384 numbers (SIMILAR!)
 
-"Apakah ALELEON mendukung Docker?"
+"Does ALELEON support Docker?"
         │
         ▼  all-MiniLM-L6-v2
-[-0.156, 0.089, -0.034, ..., 0.193]   ← 384 angka (JAUH!)
+[-0.156, 0.089, -0.034, ..., 0.193]   ← 384 numbers (DISTANT!)
 ```
 
-**Ini BUKAN TF-IDF atau BM25.**
+**This is NOT TF-IDF or BM25.**
 
-| Metode | Cara Kerja | Dipakai di kode ini? |
+| Method | How it works | Used in this code? |
 |---|---|---|
-| **TF-IDF** | Hitung frekuensi kata. "RAM" muncul 3x = relevan. Tidak paham makna. | ❌ |
-| **BM25** | TF-IDF yang lebih canggih dengan normalisasi panjang dokumen. | ❌ |
-| **Sparse Retrieval** | Vektor besar tapi kebanyakan 0. Cocokkan kata kunci. | ❌ |
-| **Dense Retrieval** ✅ | Teks → vektor padat 384D via neural network. Cocokkan **makna**. | ✅ **Ini yang dipakai** |
+| **TF-IDF** | Counts word frequency. "RAM" appearing 3x = relevant. Doesn't understand meaning. | ❌ |
+| **BM25** | Advanced TF-IDF with document length normalization. | ❌ |
+| **Sparse Retrieval** | Large vectors, mostly zeros. Matches keywords. | ❌ |
+| **Dense Retrieval** ✅ | Text → dense 384D vector via neural network. Matches **meaning**. | ✅ **Used here** |
 
-**Keunggulan Dense Retrieval:**
+**Advantages of Dense Retrieval:**
 
 ```
-Query: "Saya butuh banyak memori untuk job saya"
+Query: "I need a lot of memory for my job"
   │
-  ├── TF-IDF/BM25: Cari kata "memori" → TIDAK KETEMU (dokumen tulis "RAM")
+  ├── TF-IDF/BM25: Search for word "memory" → NOT FOUND (document says "RAM")
   │
-  └── Dense (MiniLM): Paham "memori" ≈ "RAM" secara semantik → KETEMU ✅
+  └── Dense (MiniLM): Understands "memory" ≈ "RAM" semantically → FOUND ✅
 ```
 
-### Langkah 4 — Vector Database (Chroma)
+### Step 4 — Vector Database (Chroma)
 
 ```python
 vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
 ```
 
-**Apa yang terjadi:**
+**What happens:**
 
-1. Setiap chunk di-embed menjadi vektor 384D
-2. Vektor + teks asli disimpan di database Chroma (in-memory)
+1. Each chunk is embedded into a 384D vector.
+2. The vector + original text is stored in the Chroma database (in-memory).
 
 ```
 Chroma DB (in-memory)
 ┌────────────────────────────────────────────────────┐
-│ ID │ Vector (384D)              │ Teks Asli        │
+│ ID │ Vector (384D)              │ Original Text    │
 ├────┼────────────────────────────┼──────────────────┤
-│ 0  │ [0.03, -0.12, 0.24, ...]  │ "Berikut adalah  │
-│    │                            │  konversi..."    │
+│ 0  │ [0.03, -0.12, 0.24, ...]  │ "Here is the     │
+│    │                            │  conversion..."  │
 │ 1  │ [0.08, -0.05, 0.19, ...]  │ "## Compute Node │
-│    │                            │  menjalankan..." │
+│    │                            │  runs..."        │
 │ 2  │ [-0.07, 0.14, 0.03, ...]  │ "## Interactive   │
 │    │                            │  Node..."        │
 │ ...│ ...                        │ ...              │
 └────┴────────────────────────────┴──────────────────┘
 ```
 
-**Chroma** adalah vector database yang:
-- Ringan, berjalan **in-memory** (tidak perlu server terpisah)
-- Mendukung **cosine similarity search**
-- Cocok untuk prototyping (produksi biasanya pakai Pinecone, Weaviate, Milvus)
+**Chroma** is a vector database that is:
+- Lightweight, runs **in-memory** (no separate server needed).
+- Supports **cosine similarity search**.
+- Suitable for prototyping (production usually uses Pinecone, Weaviate, Milvus).
 
 ---
 
-## FASE 3: Retrieval + Generation
+## PHASE 3: Retrieval + Generation
 
-### Retrieval — Cari Chunk Relevan
+### Retrieval — Search Relevan Chunks
 
 ```python
 retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
 ```
 
-**Jenis retrieval: Approximate Nearest Neighbor (ANN) dengan Cosine Similarity**
+**Retrieval type: Approximate Nearest Neighbor (ANN) with Cosine Similarity**
 
-Ketika user bertanya, proses yang terjadi:
+When a user asks a question, the process is:
 
 ```
-User: "Berapa RAM di partisi epyc-jumbo?"
+User: "How much RAM in epyc-jumbo partition?"
          │
          ▼ all-MiniLM-L6-v2
 Query Vector: [0.029, -0.121, 0.238, ..., 0.071]
          │
-         ▼ Cosine Similarity terhadap SEMUA chunk
+         ▼ Cosine Similarity against ALL chunks
          │
 ┌────────┬──────────────────────────────────┬────────────┐
-│ Chunk  │ Isi                              │ Similarity │
+│ Chunk  │ Content                          │ Similarity │
 ├────────┼──────────────────────────────────┼────────────┤
 │ 1      │ "Compute Node... RAM 500GB..."   │ 0.87 ← #1 │
 │ 2      │ "Interactive Node... RAM 60GB.." │ 0.72 ← #2 │
-│ 4      │ "Software Sistem..."             │ 0.41 ← #3 │
+│ 4      │ "System Software..."             │ 0.41 ← #3 │
 │ 0      │ "Intro ALELEON..."               │ 0.38 ← #4 │
 │ 5      │ "Package Manager..."             │ 0.35 ← #5 │
 │ 3      │ "---"                            │ 0.05       │
 │ 6      │ "Footer..."                      │ 0.03       │
 └────────┴──────────────────────────────────┴────────────┘
          │
-         ▼ Ambil Top-K (k=5)
-    Chunk 1, 2, 4, 0, 5 → dikirim ke LLM sebagai konteks
+         ▼ Get Top-K (k=5)
+    Chunk 1, 2, 4, 0, 5 → sent to LLM as context
 ```
 
 **Cosine Similarity Formula:**
@@ -250,39 +250,39 @@ Query Vector: [0.029, -0.121, 0.238, ..., 0.071]
 cos(θ) = ─────────────────── = ─────────────────────
               ||A|| × ||B||     √Σ(Aᵢ²) × √Σ(Bᵢ²)
 
-Hasil: -1 (berlawanan) sampai +1 (identik)
+Result: -1 (opposite) to +1 (identical)
 ```
 
-### Prompt Template — Format ChatML
+### Prompt Template — ChatML Format
 
 ```python
 template_qwen = """<|im_start|>system
-Kamu adalah agen AI asisten admin HPC Slurm...
-Jangan mengarang jawaban.<|im_end|>
+You are an AI agent, an assistance to the HPC Slurm admin...
+Do not make up answers.<|im_end|>
 <|im_start|>user
-Dokumen Referensi:
+Reference Documents:
 {context}
 
-Pertanyaan: {input}<|im_end|>
+Question: {input}<|im_end|>
 <|im_start|>assistant
 """
 ```
 
-**Kenapa format `<|im_start|>` / `<|im_end|>`?**
+**Why the `<|im_start|>` / `<|im_end|>` format?**
 
-Ini adalah **ChatML format** — format yang dipakai semasa training model Qwen untuk membedakan role:
+This is the **ChatML format** — the format used during Qwen model training to distinguish roles:
 
 ```
-<|im_start|>system     ← Instruksi untuk model (persona, rules)
+<|im_start|>system     ← Instructions for the model (persona, rules)
 ...<|im_end|>
-<|im_start|>user       ← Input dari user
+<|im_start|>user       ← User input
 ...<|im_end|>
-<|im_start|>assistant   ← Model mulai generate dari sini
+<|im_start|>assistant   ← Model starts generating from here
 ```
 
 **Template variables:**
-- `{context}` → Diisi otomatis oleh LangChain dengan 5 chunk yang di-retrieve
-- `{input}` → Diisi dengan pertanyaan user
+- `{context}` → Automatically filled by LangChain with the 5 retrieved chunks.
+- `{input}` → Filled with the user's question.
 
 ### Generation — vLLM + Qwen2.5
 
@@ -300,67 +300,67 @@ llm = VLLM(
 )
 ```
 
-**Alur generation:**
+**Generation flow:**
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Prompt yang dikirim ke LLM:                             │
+│ Prompt sent to LLM:                                     │
 │                                                         │
 │ <|im_start|>system                                      │
-│ Kamu adalah agen AI asisten admin HPC Slurm...          │
+│ You are an AI agent, an assistance to the HPC Slurm admin│
 │ <|im_end|>                                              │
 │ <|im_start|>user                                        │
-│ Dokumen Referensi:                                      │
+│ Reference Documents:                                    │
 │ [Chunk 1] Compute Node... RAM epyc-jumbo 500GB...       │
 │ [Chunk 2] Interactive Node... RAM 60GB...               │
-│ [Chunk 4] Software Sistem... Rocky Linux 8...           │
+│ [Chunk 4] System Software... Rocky Linux 8...           │
 │ [Chunk 0] Intro ALELEON Mk.V...                        │
 │ [Chunk 5] Package Manager... EasyBuild...               │
 │                                                         │
-│ Pertanyaan: Berapa RAM di partisi epyc-jumbo?            │
+│ Question: How much RAM in the epyc-jumbo partition?     │
 │ <|im_end|>                                              │
 │ <|im_start|>assistant                                   │
 │                                                         │
-│         ▼ Model generate token per token                │
+│         ▼ Model generates token by token                │
 │                                                         │
-│ "Jumlah RAM per node di partisi epyc-jumbo              │
-│  adalah 500GB efektif."                                 │
+│ "The amount of RAM per node in the epyc-jumbo           │
+│  partition is 500GB effective."                         │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Parameter generation:**
+**Generation parameters:**
 
-| Parameter | Nilai | Arti |
+| Parameter | Value | Meaning |
 |---|---|---|
-| `temperature=0.1` | Sangat rendah → jawaban **deterministik**, tidak kreatif | Cocok untuk RAG (fakta) |
-| `top_p=0.9` | Nucleus sampling — hanya pilih token dari 90% probabilitas tertinggi | Mengurangi jawaban random |
-| `max_new_tokens=512` | Maksimal 512 token output | Batas panjang jawaban |
-| `max_model_len=4096` | Maksimal 4096 token total (prompt + output) | Batas context window |
-| `gpu_memory_utilization=0.90` | Pakai 90% VRAM | 10% sisakan untuk overhead |
-| `enforce_eager=True` | Matikan CUDAGraph | Kompatibilitas RDNA4 |
+| `temperature=0.1` | Very low → **deterministic** answers, not creative | Suitable for RAG (facts) |
+| `top_p=0.9` | Nucleus sampling — only select tokens from the top 90% probability | Reduces random answers |
+| `max_new_tokens=512` | Max 512 output tokens | Answer length limit |
+| `max_model_len=4096` | Max 4096 total tokens (prompt + output) | Context window limit |
+| `gpu_memory_utilization=0.90` | Use 90% VRAM | Save 10% for overhead |
+| `enforce_eager=True` | Disable CUDAGraph | RDNA4 compatibility |
 
-### RAG Chain — Menggabungkan Semuanya
+### RAG Chain — Combining Everything
 
 ```python
 question_answer_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 ```
 
-**`create_stuff_documents_chain`** — Strategi: **"Stuff"**
+**`create_stuff_documents_chain`** — Strategy: **"Stuff"**
 
-"Stuff" artinya: **masukkan SEMUA chunk ke dalam 1 prompt sekaligus**.
+"Stuff" means: **put ALL chunks into 1 prompt at once**.
 
 ```
-Strategi lain (tidak dipakai di kode ini):
+Other strategies (not used in this code):
 ┌─────────────────────────────────────────────────────────┐
-│ Stuff     : Semua chunk → 1 prompt → 1 jawaban    ✅   │
-│ Map-Reduce: Tiap chunk → jawaban → gabung semua        │
-│ Refine    : Chunk 1 → jawaban → + Chunk 2 → refine     │
-│ Map-Rerank: Tiap chunk → jawaban + skor → pilih terbaik│
+│ Stuff     : All chunks → 1 prompt → 1 answer      ✅   │
+│ Map-Reduce: Each chunk → answer → combine all          │
+│ Refine    : Chunk 1 → answer → + Chunk 2 → refine      │
+│ Map-Rerank: Each chunk → answer + score → pick best    │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**`create_retrieval_chain`** menggabungkan retriever + stuff chain:
+**`create_retrieval_chain`** combines the retriever + stuff chain:
 
 ```
 User Input
@@ -371,15 +371,15 @@ User Input
 │ (Top-5)  │     │ (Prompt+LLM) │     │ {answer} │
 └──────────┘     └──────────────┘     └─────────┘
     │                    │
-    │ 5 chunks           │ Prompt dengan
-    │ relevan            │ context + question
+    │ 5 relevant         │ Prompt with
+    │ chunks             │ context + question
     ▼                    ▼
- Dari Chroma        Ke vLLM/GPU
+ From Chroma        To vLLM/GPU
 ```
 
 ---
 
-## Diagram Lengkap End-to-End
+## Full End-to-End Diagram
 
 ```
 spesifikasi_aleleon.txt
@@ -396,36 +396,36 @@ spesifikasi_aleleon.txt
   7 Chunks (303, 778, 958, 3, 976, 907, 151 chars)
         │
    [3] all-MiniLM-L6-v2 (CPU, 22.7M params)
-       Setiap chunk → vektor 384 dimensi
+       Each chunk → 384-dimensional vector
         │
         ▼
    [4] Chroma DB (in-memory)
-       7 vektor + 7 teks tersimpan
+       7 vectors + 7 texts stored
         │
         │
    [5] vLLM + Qwen2.5-Coder-7B (GPU, 7B params)
-       Model di-load ke VRAM (14.37 GiB)
+       Model loaded into VRAM (14.37 GiB)
         │
         │
   ══════╪══════════════════════════════════════
-  Per pertanyaan:
+  Per Question:
         │
-  User: "Berapa RAM epyc-jumbo?"
-        │
-        ▼
-  [a] Embed pertanyaan → vektor 384D (CPU)
-        │
-  [b] Cosine similarity vs 7 chunk di Chroma
-        │
-  [c] Ambil top-5 chunk paling relevan
-        │
-  [d] Masukkan ke prompt template (ChatML)
-        │
-  [e] Kirim prompt ke Qwen2.5 via vLLM (GPU)
-        │
-  [f] Model generate jawaban token-by-token
+  User: "How much RAM epyc-jumbo?"
         │
         ▼
-  "Jumlah RAM per node di partisi
-   epyc-jumbo adalah 500GB efektif."
+  [a] Embed question → 384D vector (CPU)
+        │
+  [b] Cosine similarity vs 7 chunks in Chroma
+        │
+  [c] Retrieve top-5 most relevant chunks
+        │
+  [d] Insert into prompt template (ChatML)
+        │
+  [e] Send prompt to Qwen2.5 via vLLM (GPU)
+        │
+  [f] Model generates answer token-by-token
+        │
+        ▼
+  "The amount of RAM per node in the
+   epyc-jumbo partition is 500GB effective."
 ```
