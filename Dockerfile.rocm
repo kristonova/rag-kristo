@@ -51,6 +51,11 @@ RUN pip install --no-cache-dir \
     pypika overrides mmh3 bcrypt posthog \
     build importlib-resources kubernetes
 
+# ============================================================
+# SitemapLoader dependencies
+# ============================================================
+RUN pip install --no-cache-dir lxml beautifulsoup4
+
 # onnxruntime WITHOUT dependencies (so it doesn't pull torch CUDA)
 RUN pip install --no-cache-dir --no-deps onnxruntime
 RUN pip install --no-cache-dir flatbuffers

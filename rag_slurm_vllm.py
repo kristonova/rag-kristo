@@ -1,5 +1,6 @@
 import os
-from langchain_community.document_loaders import TextLoader
+from langchain_community.document_loaders import TextLoader, SitemapLoader
+from bs4 import SoupStrainer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -8,17 +9,24 @@ from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import PromptTemplate
 
-
 def main():
     print("Memulai proses RAG dengan mesin vLLM...\n")
 
     # --- FASE 1: MEMASUKKAN DATA (INGESTION) ---
 
-    # 1. Load dokumen
-    wiki_file = "wiki/Komputasi_Python_dengan_Conda_Environment_User.txt"
-    print(f"[1] Membaca dokumen: {wiki_file}")
-    loader = TextLoader(wiki_file)
+    # 1. Load dokumen dari sitemap wiki
+    print("[1] Membaca semua halaman wiki dari sitemap...")
+    loader = SitemapLoader(
+        web_path="https://wiki.efisonlt.com/sitemap/sitemap-wiki.efisonlt.com-NS_0-0.xml",
+        filter_urls=["https://wiki.efisonlt.com/wiki/"],
+        requests_per_second=2,
+        bs_kwargs={
+            "parse_only": SoupStrainer("div", {"id": "mw-content-text"}),
+        },
+    )
     docs = loader.load()
+    print(f"    → Total halaman dimuat: {len(docs)}")
+
 
     # 2. Potong Teks (Chunking)
     print("[2] Memotong teks menjadi bagian kecil...")
@@ -28,6 +36,7 @@ def main():
         separators=["\n---", "\n## ", "\n### ", "\n\n", "\n", " "],
     )  
     splits = text_splitter.split_documents(docs)
+
 
     # Tambahkan nama file sebagai metadata ke setiap chunk
     for s in splits:
@@ -65,9 +74,9 @@ def main():
         top_p=0.9,
         tensor_parallel_size=1,
         vllm_kwargs={
-            "gpu_memory_utilization": 0.90,
+            "gpu_memory_utilization": 0.80,
             "enforce_eager": True,
-            "max_model_len": 8192,
+            "max_model_len": 32768,
         }
     )
 
