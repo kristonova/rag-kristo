@@ -1,57 +1,121 @@
 import os
-from langchain_community.document_loaders import TextLoader, SitemapLoader
-from bs4 import SoupStrainer
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+import gc
+import torch
+import requests
+from xml.etree import ElementTree
+from langchain_text_splitters import HTMLSectionSplitter, RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.llms import VLLM
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import PromptTemplate
+from langchain_core.documents import Document
+from bs4 import BeautifulSoup
+import time
+
+def load_wiki_documents(sitemap_url, requests_per_second=2):
+    """
+    Document Structure-Based Loading:
+    1. Parse sitemap XML → ambil semua URL
+    2. Fetch setiap halaman
+    3. Ekstrak <div id="mw-content-text"> sebagai HTML (BUKAN plain text)
+    4. Split berdasarkan heading HTML (h2, h3)
+    5. Fallback ke RecursiveCharacterTextSplitter jika chunk masih terlalu besar
+    """
+
+    # --- Step 1: Parse sitemap ---
+    print("    Mengambil sitemap...")
+    resp = requests.get(sitemap_url)
+    root = ElementTree.fromstring(resp.content)
+    ns = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    urls = [loc.text for loc in root.findall(".//ns:loc", ns)]
+    print(f"    → {len(urls)} URL ditemukan")
+
+    # --- Step 2-3: Fetch & extract HTML content ---
+    headers_to_split_on = [
+        ("h1", "Header 1"),
+        ("h2", "Header 2"),
+        ("h3", "Header 3"),
+    ]
+    html_splitter = HTMLSectionSplitter(headers_to_split_on=headers_to_split_on)
+
+    # Fallback splitter untuk chunk yang masih terlalu besar
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=4500,
+        chunk_overlap=900,
+        separators=["\n---", "\n\n", "\n", " "],
+    )
+
+    all_splits = []
+
+    for i, url in enumerate(urls):
+        try:
+            time.sleep(1.0 / requests_per_second)
+            page_resp = requests.get(url, timeout=30)
+            soup = BeautifulSoup(page_resp.content, "lxml")
+
+            # Ekstrak konten utama wiki (masih HTML!)
+            content_div = soup.find("div", {"id": "mw-content-text"})
+            if not content_div:
+                continue
+
+            content_html = str(content_div)
+            page_title = url.split("/wiki/")[-1].replace("_", " ") if "/wiki/" in url else url
+
+            # --- Step 4: Split berdasarkan heading HTML ---
+            html_docs = html_splitter.split_text(content_html)
+
+            for doc in html_docs:
+                # Tambahkan metadata
+                doc.metadata["source"] = url
+                doc.metadata["title"] = page_title
+
+                # --- Step 5: Fallback split jika chunk terlalu besar ---
+                if len(doc.page_content) > 4500:
+                    sub_splits = text_splitter.split_documents([doc])
+                    all_splits.extend(sub_splits)
+                else:
+                    all_splits.append(doc)
+
+            print(f"    [{i+1}/{len(urls)}] {page_title}: {len(html_docs)} sections")
+
+        except Exception as e:
+            print(f"    [{i+1}/{len(urls)}] ERROR {url}: {e}")
+            continue
+
+    return all_splits
+
 
 def main():
     print("Memulai proses RAG dengan mesin vLLM...\n")
 
     # --- FASE 1: MEMASUKKAN DATA (INGESTION) ---
 
-    # 1. Load dokumen dari sitemap wiki
-    print("[1] Membaca semua halaman wiki dari sitemap...")
-    loader = SitemapLoader(
-        web_path="https://wiki.efisonlt.com/sitemap/sitemap-wiki.efisonlt.com-NS_0-0.xml",
-        filter_urls=["https://wiki.efisonlt.com/wiki/"],
+    # 1. Load + Split dokumen dari wiki (Document Structure-Based)
+    print("[1] Membaca & splitting halaman wiki berdasarkan struktur HTML...")
+    splits = load_wiki_documents(
+        sitemap_url="https://wiki.efisonlt.com/sitemap/sitemap-wiki.efisonlt.com-NS_0-0.xml",
         requests_per_second=2,
-        bs_kwargs={
-            "parse_only": SoupStrainer("div", {"id": "mw-content-text"}),
-        },
     )
-    docs = loader.load()
-    print(f"    → Total halaman dimuat: {len(docs)}")
 
-
-    # 2. Potong Teks (Chunking)
-    print("[2] Memotong teks menjadi bagian kecil...")
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=4500, 
-        chunk_overlap=300,
-        separators=["\n---", "\n## ", "\n### ", "\n\n", "\n", " "],
-    )  
-    splits = text_splitter.split_documents(docs)
-
-
-    # Tambahkan nama file sebagai metadata ke setiap chunk
+    # Tambahkan label sumber ke setiap chunk
     for s in splits:
-        source = os.path.basename(s.metadata.get("source", ""))
-        s.page_content = f"[Sumber: {source}]\n{s.page_content}"
+        title = s.metadata.get("title", "Unknown")
+        header = s.metadata.get("Header 2", s.metadata.get("Header 3", ""))
+        prefix = f"[Sumber: {title}]"
+        if header:
+            prefix += f" [Section: {header}]"
+        s.page_content = f"{prefix}\n{s.page_content}"
 
-    print(f"    → Jumlah chunk: {len(splits)}")
+    print(f"\n    → Total chunks: {len(splits)}")
 
-    # DEBUG: Tampilkan isi setiap chunk agar bisa dievaluasi
+    # DEBUG: Tampilkan isi setiap chunk
     for i, s in enumerate(splits):
         print(f"\n    [Chunk {i}] ({len(s.page_content)} chars):")
         print(f"    {s.page_content[:120]}...")
 
-
-    # 3. Setup Model Embedding (Lokal via HuggingFace - CPU/GPU)
+    # 2. Setup Model Embedding (Lokal via HuggingFace - CPU/GPU)
     print("[3] Load model embedding lokal...")
     embeddings = HuggingFaceEmbeddings(model_name="intfloat/multilingual-e5-large")
 
