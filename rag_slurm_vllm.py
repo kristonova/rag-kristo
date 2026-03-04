@@ -134,7 +134,7 @@ def main():
         model="Qwen/Qwen2.5-Coder-7B-Instruct",  # ← Ganti kembali
         trust_remote_code=True,
         max_new_tokens=1024,
-        temperature=0.1,                           
+        temperature=0.5,                           
         top_p=0.9,
         tensor_parallel_size=1,
         vllm_kwargs={
